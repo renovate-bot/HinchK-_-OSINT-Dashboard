@@ -2,5 +2,5 @@
   "name": "Sentinel OSINT Dashboard",
   "description": "An AI-powered OSINT intelligence gathering tool with progressive disclosure, target reasoning, and investigator-led exploration.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

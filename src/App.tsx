@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Shield, Search, Terminal as TerminalIcon, Database, Activity, AlertCircle, CheckCircle2, Clock, Zap, XCircle, Radar } from 'lucide-react';
-import { InvestigationState, ChatMessage, PathwayStatus } from './types';
+import { Shield, Search, Terminal as TerminalIcon, Database, Activity, AlertCircle, CheckCircle2, Clock, Zap, XCircle, Radar, Network, List, Calendar } from 'lucide-react';
+import * as d3 from 'd3';
+import { InvestigationState, ChatMessage, PathwayStatus, IntelPoint } from './types';
 import { processInvestigationUpdate } from './services/geminiService';
 
 // --- Sub-components (Local for now, can be extracted later) ---
@@ -99,7 +100,160 @@ const Terminal = ({ messages, onSendMessage, isLoading, suggestedQuestions }: {
   );
 };
 
+const TimelineView = ({ intelPoints }: { intelPoints: IntelPoint[] }) => {
+  const sortedPoints = [...intelPoints].sort((a, b) => 
+    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+
+  return (
+    <div className="relative pl-8 pr-4 py-4 space-y-8">
+      <div className="absolute left-4 top-0 bottom-0 w-px bg-border group-hover:bg-brand-green/20 transition-colors" />
+      
+      {sortedPoints.length === 0 ? (
+        <div className="py-12 text-center opacity-20 uppercase tracking-[0.5em]">No Temporal Data</div>
+      ) : (
+        sortedPoints.map((point, index) => (
+          <motion.div 
+            key={point.id}
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: index * 0.05 }}
+            className="relative"
+          >
+            <div className="absolute -left-[21px] top-1.5 w-2 h-2 rounded-full bg-brand-blue shadow-[0_0_8px_rgba(0,168,255,0.6)]" />
+            
+            <div className="bg-white/5 border border-white/5 p-4 rounded hover:bg-white/10 transition-all group">
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-[10px] text-brand-blue font-mono uppercase tracking-widest">{point.timestamp}</span>
+                <span className="text-[10px] uppercase bg-black/40 px-2 py-0.5 rounded border border-white/10 text-gray-500">
+                  {point.category}
+                </span>
+              </div>
+              <h4 className="text-sm font-bold text-gray-200 mb-1">{point.label}</h4>
+              <p className="text-xs text-gray-400 font-mono break-all">{point.value}</p>
+              
+              <div className="mt-3 flex justify-between items-center opacity-40 group-hover:opacity-100 transition-opacity">
+                <span className="text-[10px] font-mono text-gray-500">SOURCE: {point.source || "RED_ACTED"}</span>
+                <span className="text-[10px] text-brand-green">CONF: {(point.confidence * 100).toFixed(0)}%</span>
+              </div>
+            </div>
+          </motion.div>
+        ))
+      )}
+    </div>
+  );
+};
+
+const NetworkView = ({ state }: { state: InvestigationState }) => {
+  const svgRef = React.useRef<SVGSVGElement>(null);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!svgRef.current || !containerRef.current || state.intelPoints.length === 0) return;
+
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+
+    const svg = d3.select(svgRef.current);
+    svg.selectAll("*").remove();
+
+    const nodes: any[] = [{ id: 'target', label: state.targetName, type: 'root' }];
+    const links: any[] = [];
+
+    const categories = Array.from(new Set(state.intelPoints.map(p => p.category)));
+    categories.forEach(cat => {
+      nodes.push({ id: `cat-${cat}`, label: cat, type: 'category' });
+      links.push({ source: 'target', target: `cat-${cat}` });
+
+      state.intelPoints.filter(p => p.category === cat).forEach(p => {
+        nodes.push({ id: p.id, label: p.label, value: p.value, type: 'point' });
+        links.push({ source: `cat-${cat}`, target: p.id });
+      });
+    });
+
+    const simulation = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(links).id((d: any) => d.id).distance(100))
+      .force("charge", d3.forceManyBody().strength(-300))
+      .force("center", d3.forceCenter(width / 2, height / 2))
+      .force("collision", d3.forceCollide().radius(50));
+
+    const link = svg.append("g")
+      .attr("stroke", "#1f1f23")
+      .attr("stroke-opacity", 0.6)
+      .selectAll("line")
+      .data(links)
+      .join("line")
+      .attr("stroke-width", 1);
+
+    const node = svg.append("g")
+      .selectAll("g")
+      .data(nodes)
+      .join("g")
+      .call(d3.drag<any, any>()
+        .on("start", dragstarted)
+        .on("drag", dragged)
+        .on("end", dragended));
+
+    node.append("circle")
+      .attr("r", (d) => d.type === 'root' ? 12 : d.type === 'category' ? 8 : 5)
+      .attr("fill", (d) => d.type === 'root' ? "#00ff41" : d.type === 'category' ? "#00a8ff" : "#1f1f23")
+      .attr("stroke", (d) => d.type === 'point' ? "#333" : "none")
+      .attr("class", d => d.type === 'root' ? "glow-green" : "");
+
+    node.append("text")
+      .attr("dx", 12)
+      .attr("dy", 4)
+      .text((d) => d.label)
+      .attr("fill", "#e2e2e4")
+      .attr("font-size", (d) => d.type === 'root' ? "14px" : "10px")
+      .attr("font-family", "monospace")
+      .attr("font-weight", (d) => d.type === 'root' ? "bold" : "normal");
+
+    simulation.on("tick", () => {
+      link
+        .attr("x1", (d: any) => d.source.x)
+        .attr("y1", (d: any) => d.source.y)
+        .attr("x2", (d: any) => d.target.x)
+        .attr("y2", (d: any) => d.target.y);
+
+      node.attr("transform", (d: any) => `translate(${d.x},${d.y})`);
+    });
+
+    function dragstarted(event: any) {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      event.subject.fx = event.subject.x;
+      event.subject.fy = event.subject.y;
+    }
+
+    function dragged(event: any) {
+      event.subject.fx = event.x;
+      event.subject.fy = event.y;
+    }
+
+    function dragended(event: any) {
+      if (!event.active) simulation.alphaTarget(0);
+      event.subject.fx = null;
+      event.subject.fy = null;
+    }
+
+    return () => simulation.stop();
+  }, [state, state.intelPoints]);
+
+  return (
+    <div ref={containerRef} className="w-full h-full relative cursor-grab active:cursor-grabbing">
+      <svg ref={svgRef} className="w-full h-full" />
+      {state.intelPoints.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20 uppercase tracking-[0.5em] font-mono text-xs">
+          Waiting for Intelligence Matrix
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Dashboard = ({ state }: { state: InvestigationState }) => {
+  const [visMode, setVisMode] = useState<'LIST' | 'NETWORK' | 'TIMELINE'>('LIST');
+
   return (
     <div className="grid grid-cols-12 gap-4 h-full">
       {/* Target Profile Card */}
@@ -206,60 +360,120 @@ const Dashboard = ({ state }: { state: InvestigationState }) => {
       <div className="col-span-12 lg:col-span-8 flex flex-col">
         <div className="flex-1 bg-panel/40 border border-border rounded-lg p-2 overflow-hidden flex flex-col">
           <div className="p-3 border-b border-border flex justify-between items-center bg-black/20">
-            <span className="text-xs font-mono font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-               <AlertCircle size={14} className="text-brand-blue" />
-               Raw_Intelligence_Feed
-            </span>
-            <span className="text-[10px] font-mono opacity-40 uppercase">CONFIDENTIAL // TOP SECRET</span>
+            <div className="flex items-center gap-6">
+              <span className="text-xs font-mono font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                 <AlertCircle size={14} className="text-brand-blue" />
+                 Raw_Intelligence_Feed
+              </span>
+              
+              <div className="flex items-center bg-black/40 rounded p-0.5 border border-border">
+                <button 
+                  onClick={() => setVisMode('LIST')}
+                  className={`p-1.5 rounded transition-all ${visMode === 'LIST' ? 'bg-brand-blue text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                  title="List View"
+                >
+                  <List size={14} />
+                </button>
+                <button 
+                  onClick={() => setVisMode('NETWORK')}
+                  className={`p-1.5 rounded transition-all ${visMode === 'NETWORK' ? 'bg-brand-blue text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                  title="Network View"
+                >
+                  <Network size={14} />
+                </button>
+                <button 
+                  onClick={() => setVisMode('TIMELINE')}
+                  className={`p-1.5 rounded transition-all ${visMode === 'TIMELINE' ? 'bg-brand-blue text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                  title="Timeline View"
+                >
+                  <Calendar size={14} />
+                </button>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono opacity-40 uppercase hidden sm:inline">CONFIDENTIAL // TOP SECRET</span>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 content-start">
-            <table className="w-full text-left font-mono text-xs border-collapse">
-              <thead>
-                <tr className="text-gray-500 uppercase border-b border-border">
-                  <th className="py-2 px-4 font-normal">Category</th>
-                  <th className="py-2 px-4 font-normal">Intelligence Vector</th>
-                  <th className="py-2 px-4 font-normal">Conf</th>
-                  <th className="py-2 px-4 font-normal">Source</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {state.intelPoints.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="py-12 text-center opacity-20 uppercase tracking-[0.5em]">No Intelligence Logged</td>
-                  </tr>
-                ) : (
-                  state.intelPoints.map((point) => (
-                    <motion.tr 
-                      key={point.id}
-                      initial={{ opacity: 0, y: 5 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="hover:bg-white/5 transition-colors group"
-                    >
-                      <td className="py-3 px-4">
-                        <span className="bg-brand-blue/10 border border-brand-blue/30 text-brand-blue px-2 py-0.5 rounded text-[10px] uppercase">
-                          {point.category}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex flex-col">
-                          <span className="text-gray-500 text-[9px] uppercase mb-1">{point.label}</span>
-                          <span className="text-gray-200 group-hover:text-brand-green transition-colors">{point.value}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className={point.confidence > 0.8 ? 'text-brand-green' : 'text-gray-500'}>
-                          {(point.confidence * 100).toFixed(0)}%
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 opacity-40 group-hover:opacity-80 transition-opacity">
-                        {point.source || "UNKNOWN"}
-                      </td>
-                    </motion.tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <AnimatePresence mode="wait">
+              {visMode === 'LIST' && (
+                <motion.div
+                  key="list"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <table className="w-full text-left font-mono text-xs border-collapse">
+                    <thead>
+                      <tr className="text-gray-500 uppercase border-b border-border">
+                        <th className="py-2 px-4 font-normal">Category</th>
+                        <th className="py-2 px-4 font-normal">Intelligence Vector</th>
+                        <th className="py-2 px-4 font-normal">Conf</th>
+                        <th className="py-2 px-4 font-normal">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {state.intelPoints.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="py-12 text-center opacity-20 uppercase tracking-[0.5em]">No Intelligence Logged</td>
+                        </tr>
+                      ) : (
+                        state.intelPoints.map((point) => (
+                          <motion.tr 
+                            key={point.id}
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="hover:bg-white/5 transition-colors group"
+                          >
+                            <td className="py-3 px-4">
+                              <span className="bg-brand-blue/10 border border-brand-blue/30 text-brand-blue px-2 py-0.5 rounded text-[10px] uppercase">
+                                {point.category}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="flex flex-col">
+                                <span className="text-gray-500 text-[9px] uppercase mb-1">{point.label}</span>
+                                <span className="text-gray-200 group-hover:text-brand-green transition-colors">{point.value}</span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={point.confidence > 0.8 ? 'text-brand-green' : 'text-gray-500'}>
+                                {(point.confidence * 100).toFixed(0)}%
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 opacity-40 group-hover:opacity-80 transition-opacity">
+                              {point.source || "UNKNOWN"}
+                            </td>
+                          </motion.tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </motion.div>
+              )}
+
+              {visMode === 'NETWORK' && (
+                <motion.div
+                  key="network"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="h-full"
+                >
+                  <NetworkView state={state} />
+                </motion.div>
+              )}
+
+              {visMode === 'TIMELINE' && (
+                <motion.div
+                  key="timeline"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <TimelineView intelPoints={state.intelPoints} />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>
