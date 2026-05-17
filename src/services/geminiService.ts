@@ -56,7 +56,7 @@ export async function processInvestigationUpdate(
 ): Promise<{ state: InvestigationState; chatResponse: string }> {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: [
         {
           role: "user",
@@ -70,13 +70,13 @@ export async function processInvestigationUpdate(
             
             Guidelines:
             1. Analyze the user input to find new information or directions.
-            2. Update "intelPoints" if new data is confirmed.
+            2. Update "intelPoints" if new data is confirmed. Add at least 3-4 interesting intel points if this is the start.
             3. Update "pathways" (e.g., Social Media, Domain records, Public archives, Leaks).
             4. Act as the "Judging Matrix": Determine if we have enough info. Set "isComplete" to true only if high-confidence data covers basic identity, residency, and primary digital footprint.
             5. Provide "suggestedQuestions" to help the investigator (the user) move forward.
             6. Provide a "chatResponse" that is professional, slightly clinical, and investigative.
             
-            If this is the start (targetName is empty), set the targetName from the input and initialize pathways.`
+            If this is the start (targetName is empty), set the targetName from the input and initialize pathways with realistic categories for that person/entity.`
           }]
         }
       ],
@@ -86,7 +86,20 @@ export async function processInvestigationUpdate(
       },
     });
 
-    const result = JSON.parse(response.text);
+    if (!response.text) {
+      throw new Error("No response from Sentinel_OS");
+    }
+
+    let result;
+    try {
+      // Clean up the text in case Gemini wrapped it in markdown
+      const cleanedText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+      result = JSON.parse(cleanedText);
+    } catch (e) {
+      console.error("JSON Parse Error. Raw text:", response.text);
+      throw new Error("Intelligence data corruption detected. Logic matrix unstable.");
+    }
+
     const { chatResponse, ...newState } = result;
     
     return {

@@ -271,6 +271,7 @@ export default function App() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [targetQuery, setTargetQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [state, setState] = useState<InvestigationState>({
     targetName: '',
@@ -287,6 +288,7 @@ export default function App() {
     if (!targetQuery.trim()) return;
 
     setIsLoading(true);
+    setError(null);
     try {
       const { state: newState, chatResponse } = await processInvestigationUpdate(state, [], targetQuery);
       setState(newState);
@@ -298,6 +300,7 @@ export default function App() {
       setIsInitialized(true);
     } catch (err) {
       console.error(err);
+      setError('Investigation Failed: Intelligence vectors could not be initialized. Please try a different target.');
     } finally {
       setIsLoading(false);
     }
@@ -400,10 +403,22 @@ export default function App() {
                     type="text" 
                     value={targetQuery}
                     onChange={(e) => setTargetQuery(e.target.value)}
-                    placeholder="ENTER FULL NAME, ORGANIZATION OR ALIAS..."
-                    className="relative w-full bg-black border border-border p-6 rounded-lg font-mono text-xl uppercase tracking-wider focus:outline-none focus:border-brand-green text-center text-brand-green placeholder:opacity-20"
+                    disabled={isLoading}
+                    placeholder={isLoading ? "SCANNING ENTIRE WEB..." : "ENTER FULL NAME, ORGANIZATION OR ALIAS..."}
+                    className={`relative w-full bg-black border p-6 rounded-lg font-mono text-xl uppercase tracking-wider focus:outline-none transition-all text-center text-brand-green placeholder:opacity-20 ${error ? 'border-brand-red' : 'border-border focus:border-brand-green'}`}
                   />
-                  <div className="absolute bottom-2 right-2 text-[8px] font-bold text-gray-500 font-mono">PRESS ENTER TO RUN AUTO-SCRAPER</div>
+                  {error && (
+                    <motion.div 
+                      initial={{ opacity: 0 }} 
+                      animate={{ opacity: 1 }} 
+                      className="mt-4 text-brand-red font-mono text-xs uppercase flex items-center justify-center gap-2"
+                    >
+                      <AlertCircle size={14} /> {error}
+                    </motion.div>
+                  )}
+                  <div className="absolute bottom-2 right-2 text-[8px] font-bold text-gray-500 font-mono">
+                    {isLoading ? "ESTABLISHING ENCRYPTED LINK..." : "PRESS ENTER TO RUN AUTO-SCRAPER"}
+                  </div>
                 </form>
               </div>
             </motion.div>
